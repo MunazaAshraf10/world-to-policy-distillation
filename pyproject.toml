@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["integration: requires the official checkpoint, data, and CUDA"]
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+include = ["src/**/*.py", "scripts/*.py", "tests/*.py", "pyproject.toml"]
+extend-exclude = ["OccWorld", ".venv-occworld"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

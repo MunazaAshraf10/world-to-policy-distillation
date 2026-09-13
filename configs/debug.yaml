@@ -1,0 +1,19 @@
+occworld_root: OccWorld
+upstream_config: OccWorld/config/occworld.py
+expected_revision: 1ee7f77ecc4c984a4f7f6411d95c2e6e73806b6e
+checkpoint: null
+data_root: null
+infos: null
+sample_index: 0
+seed: 0
+device: cuda:0
+output: results/occworld_stage1/summary.json
+rollout:
+  start_frame: 0
+  mid_frame: 5
+  end_frame: 11
+  sequence_length: 12
+  grid: [200, 200, 16]
+  classes: 18
+  modes: 3
+  step_seconds: 0.5

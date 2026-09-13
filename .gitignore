@@ -1,2 +1,11 @@
 CLAUDE.md
 CODEX.md
+.venv-occworld/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+/results/
+/data/
+/checkpoints/
+/.venv/

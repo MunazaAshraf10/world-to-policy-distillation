@@ -1,0 +1,22 @@
+# Runtime subset of OccWorld/environment.yaml; OpenMMLab additions documented in docs/setup.md.
+numpy==1.24.3
+torch==2.0.1+cu118
+torchvision==0.15.2+cu118
+mmcv==2.0.1
+mmengine==0.8.4
+mmdet==3.0.0
+mmdet3d==1.1.1
+einops==0.7.0
+pyquaternion==0.9.9
+nuscenes-devkit==1.1.10
+matplotlib==3.5.2
+opencv-python==4.8.0.76
+scikit-image==0.21.0
+scipy==1.10.1
+numba==0.57.1
+llvmlite==0.40.1
+shapely==1.8.5
+pyyaml==6.0.1
+pytest==7.4.3
+ruff==0.8.6
+setuptools==60.2.0

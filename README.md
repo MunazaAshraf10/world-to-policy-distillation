@@ -1,605 +1,103 @@
-# WPT-OccWorld: World-to-Policy Distillation for Lightweight Autonomous Driving
+# WPT with frozen OccWorld
 
-> **Research reproduction + extension project** inspired by  
-> **WPT: World-to-Policy Transfer via Online World Model Distillation** (2025/2026)  
-> with a **pretrained OccWorld world model** to avoid training a world model from scratch.
+This repository implements a staged adaptation of **World-to-Policy Transfer via Online World Model Distillation (WPT)** using pretrained **OccWorld** in place of Drive-OccWorld. The goal is to transfer world-informed planning knowledge into a student policy that runs independently at deployment.
 
-This repository explores whether knowledge from a pretrained autonomous-driving world model can be transferred into a lightweight driving policy through **policy distillation** and **world-reward distillation**.
+**Current scope: Stage 1, frozen OccWorld verification.** The adapter, sample loader, verification CLI, tests, and reproducibility reports are implemented. No teacher, student, reward model, distillation loss, or training run is implemented yet. Stage 1 is not accepted until a real pretrained checkpoint-backed rollout passes.
 
-The project is designed as an independent research implementation: reproduce the core WPT methodology, adapt it to a publicly available pretrained occupancy world model, and evaluate whether the distilled student retains planning quality while reducing inference cost.
+Validation completed: **35 tests passed**, one real integration test skipped, and the downloaded occupancy window passed the upstream data loader. See [verification status](docs/verification_status.md) for evidence and the remaining checkpoint blocker.
 
----
+The local [WPT paper](WPT.pdf) is arXiv:2511.20095v2, March 18, 2026. The [OccWorld submodule](OccWorld) is pinned to `1ee7f77ecc4c984a4f7f6411d95c2e6e73806b6e` and is kept unchanged.
 
-## Research Question
-
-**Can a computationally expensive world model be used only during training to improve a lightweight policy that runs independently at inference time?**
-
-The central idea is:
+## Intended training architecture
 
 ```text
-                         TRAINING
-┌──────────────────────────────────────────────────────────────┐
-│                                                              │
-│  nuScenes observations                                       │
-│          │                                                   │
-│          ├──────────────► Pretrained OccWorld                │
-│          │                    (frozen)                        │
-│          │                       │                            │
-│          │                 future world states               │
-│          │                       │                            │
-│          ▼                       ▼                            │
-│    Teacher Policy ───────► Reward Model                      │
-│          │                       │                            │
-│          │                 best trajectory                   │
-│          │                       │                            │
-│          ├──── Policy Distillation ───────────┐              │
-│          │                                    │              │
-│          └──── World-Reward Distillation ─────┤              │
-│                                               ▼              │
-│                                      Student Policy          │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-
-                         INFERENCE
-
-                 camera / BEV observations
-                           │
-                           ▼
-                    Student Policy
-                           │
-                           ▼
-                   predicted trajectory
-
-         OccWorld + teacher + reward model are discarded.
+nuScenes history
+    |
+    +-- historical occupancy + motion metadata --> frozen OccWorld
+    |                                                |
+    |                                         predicted future world
+    |                                                |
+    |                              +-----------------+----------------+
+    |                              |                                  |
+    |                       teacher plan decoder                 reward model
+    |                              |                                  ^
+    |                   planning representations                      |
+    |                   + candidate trajectories ---------------------+
+    |                              |                                  |
+    |                              |                           best teacher reward
+    |                              v                                  |
+    |                     policy distillation                 reward distillation
+    |                              ^                                  ^
+    |                              |                                  |
+    +--> student encoder + decoder +--> student trajectory --> same reward model
 ```
 
----
+The teacher's planning decoder uses predicted world features (WPT Eq. 8). Policy distillation matches planning representations (Eq. 15). World reward distillation compares the student's trajectory reward with the best teacher reward (Eq. 16). Selection of a teacher trajectory is not itself the policy distillation loss.
 
-## Why This Project?
+For the initial official OccWorld protocol, future `gt_mode` conditioning also enters the world model. The full [paper mapping and diagram](docs/paper_mapping.md) makes that dependency explicit.
 
-World models can provide rich information about how a scene may evolve, but they can be too expensive for real-time deployment.
+At deployment, the intended path is simply observations → student → trajectory. The student must not initialize or call OccWorld, the teacher, or the reward model.
 
-WPT proposes transferring that knowledge into a lightweight policy so that the world model is required **during training only**.
+## Stage 1 setup
 
-This project adapts that idea using **OccWorld**, which has publicly released pretrained weights. This avoids the high cost of training a complete world model from scratch and makes the experiment practical on a single H100-class GPU.
+See [setup and asset instructions](docs/setup.md) for the isolated Python 3.8 environment, exact package versions, downloads, and tests. The existing system PyTorch environment remains unchanged.
 
-> **Important:** this is not intended to be an exact reproduction of the original WPT architecture.  
-> The original methodology is being independently implemented while **OccWorld is substituted as the pretrained world-model component**.
-
----
-
-## Papers
-
-### WPT
-
-**WPT: World-to-Policy Transfer via Online World Model Distillation**
-
-- arXiv: https://arxiv.org/abs/2511.20095
-- Core ideas:
-  - online world-model guidance
-  - teacher policy refinement
-  - policy distillation
-  - world-reward distillation
-  - lightweight student deployment
-
-### OccWorld
-
-**OccWorld: Learning a 3D Occupancy World Model for Autonomous Driving — ECCV 2024**
-
-- GitHub: https://github.com/wzzheng/OccWorld
-- Pretrained weights: https://cloud.tsinghua.edu.cn/d/ff4612b2453841fba7a5/
-- Dataset: nuScenes
-- Predicts future 3D occupancy and ego motion.
-
----
-
-## Planned Architecture
-
-### World Model
-
-**OccWorld**
-
-- pretrained
-- frozen during distillation
-- provides future occupancy/world-state predictions
-- no backpropagation through the world model during the initial experiments
-
-### Teacher Policy
-
-A larger trajectory-planning policy.
-
-Initial implementation:
-
-```text
-BEV / scene representation
-        ↓
-planning decoder
-        ↓
-K candidate trajectories
+```bash
+.venv-occworld/bin/python scripts/verify_occworld.py \
+  --preflight-only --output results/occworld_stage1/preflight.json
 ```
 
-The teacher proposes multiple candidate trajectories.
+The real rollout requires explicit asset paths:
 
-The reward module uses predicted future world states to rank them.
-
-### Student Policy
-
-A smaller policy that produces a trajectory without running the world model.
-
-```text
-observation
-    ↓
-lightweight encoder
-    ↓
-planning decoder
-    ↓
-trajectory
+```bash
+.venv-occworld/bin/python scripts/verify_occworld.py \
+  --checkpoint checkpoints/occworld/full.pth \
+  --data-root data/nuscenes \
+  --infos data/nuscenes_infos_val_temporal_v3_scene.pkl
 ```
 
-Possible student backbones:
+The checkpoint filename above is a required input, not a bundled asset. The original checkpoint share currently reports “Link does not exist”; see [upstream issue 39](https://github.com/wzzheng/OccWorld/issues/39). A metadata copy is available through DOME; its distinct provenance and checksum are documented in the setup guide. A DOME model checkpoint cannot substitute for pretrained OccWorld.
 
-- BEVFormer-Tiny-style encoder
-- lightweight ViT/BEV encoder
-- compact custom transformer policy
+The verifier uses one official validation window: 12 occupancy grids, five history frames, and six predictions at 0.5-second intervals. It loads every checkpoint parameter and buffer, freezes the entire model, and checks shape, finite values, adapter/direct parity, and isolation from future occupancy and displacement targets.
 
-The exact backbone will be kept modular so different students can be evaluated.
+| Output | Shape |
+| --- | --- |
+| Semantic labels | `[1,6,200,200,16]` |
+| Semantic logits | `[1,6,200,200,16,18]` |
+| Ego displacement modes | `[1,6,3,2]` |
+| Selected ego displacements | `[1,6,2]` |
 
----
+Spatial axes and per-step displacement semantics remain unchanged. Future `gt_mode` values are retained exactly as in upstream inference; this is an official-protocol verification, not observation-only forecasting. Future occupancy and displacement annotations are independently perturbed to check that predictions do not depend on them.
 
-## Distillation Objectives
+Results are written to `results/occworld_stage1/summary.json`, with configuration, source and asset hashes, sample identity, conditioning, tensor statistics, checks, software versions, GPU, elapsed time, and peak allocated VRAM. An existing report is preserved unless `--overwrite` is specified. Only a report with `status: stage1_passed` establishes acceptance.
 
-### 1. Policy Distillation
+## Tests
 
-Transfer the teacher's internal planning representation to the student.
-
-Conceptually:
-
-```math
-L_policy = D(z_student, z_teacher)
+```bash
+.venv-occworld/bin/python -m pytest -q
+.venv-occworld/bin/ruff check src scripts tests
+.venv-occworld/bin/ruff format --check src scripts tests
 ```
 
-where `z_teacher` and `z_student` are planning features/query representations.
+The real integration test is skipped unless `--integration-config` identifies a YAML file with actual asset paths. A skipped integration test is not a successful Stage 1 run. Small test fixtures verify adapter contracts only and cannot be selected by the production CLI.
 
-Initial implementation candidates:
+## Research roadmap
 
-- MSE
-- Smooth L1
-- cosine-distance loss
+1. Complete frozen OccWorld verification with a full pretrained checkpoint.
+2. Establish a lightweight student baseline without distillation.
+3. Implement a teacher decoder conditioned on predicted future world features.
+4. Implement separate imitation and simulation reward supervision.
+5. Implement policy distillation and evaluate its ablation.
+6. Implement world reward distillation and evaluate its ablation.
+7. Compose full WPT adaptation training and compare all controlled variants.
 
-The final form will follow the WPT paper as closely as possible.
+Later evaluation will report trajectory L2 and collision rates at 1, 2, and 3 seconds, plus latency, parameter count, VRAM, and GPU hours. No reproduction metrics or speedup claims are currently made.
 
-### 2. World-Reward Distillation
-
-The teacher generates multiple trajectories:
-
-```text
-τ1, τ2, ..., τK
-```
-
-The world-model-guided reward module selects:
-
-```text
-τ* = argmax R(τk)
-```
-
-The student is then encouraged to generate a trajectory whose world reward approaches the teacher's best trajectory.
-
-Conceptually:
-
-```math
-L_reward = |R(τ_student) - R(τ_teacher*)|
-```
-
-### Total Objective
-
-```math
-L_total =
-    L_planning
-  + λ_policy L_policy
-  + λ_reward L_reward
-```
-
----
-
-## Dataset
-
-### nuScenes
-
-This project uses the **nuScenes** autonomous-driving dataset.
-
-Expected inputs include:
-
-- multi-camera observations
-- ego pose / ego motion
-- map information when required
-- trajectory annotations
-- occupancy annotations required by OccWorld
-
-Dataset website:
-
-https://www.nuscenes.org/
-
-OccWorld additionally expects the occupancy data/preprocessing described in its repository.
-
----
-
-## Compute
-
-Primary development hardware:
-
-```text
-GPU: 1 × NVIDIA H100 PCIe
-VRAM: 80 GB
-```
-
-The PCIe H100 is sufficient for initial development because the pretrained world model is frozen.
-
-Development strategy:
-
-1. debug on a very small nuScenes subset
-2. verify forward passes and loss values
-3. overfit a tiny dataset
-4. run reduced experiments
-5. launch full training only after the pipeline is stable
-
-This avoids wasting expensive GPU hours on implementation bugs.
-
----
-
-## Experimental Plan
-
-### Experiment 0 — Pipeline Sanity Check
-
-Goal:
-
-- load nuScenes
-- load OccWorld checkpoint
-- run frozen world-model inference
-- visualize predicted future occupancy
-
-Success criterion:
-
-```text
-observation → OccWorld → future occupancy
-```
-
-works end-to-end.
-
----
-
-### Experiment 1 — Student Baseline
-
-Train the lightweight student **without distillation**.
-
-This establishes the baseline:
-
-```text
-Student + imitation/planning loss
-```
-
-Record:
-
-- trajectory L2
-- collision rate
-- inference latency
-- parameter count
-
----
-
-### Experiment 2 — Teacher Policy
-
-Train the larger teacher policy.
-
-Teacher outputs multiple candidate trajectories.
-
-Expected behavior:
-
-```text
-observation
-   ↓
-teacher
-   ↓
-{τ1, τ2, ..., τK}
-```
-
----
-
-### Experiment 3 — World-Model Reward
-
-Freeze OccWorld.
-
-For each candidate trajectory:
-
-```text
-candidate trajectory
-        +
-predicted future world
-        ↓
-    reward score
-```
-
-Select the teacher's best candidate.
-
----
-
-### Experiment 4 — Policy Distillation
-
-Train the student to match the teacher's planning representation.
-
-Compare:
-
-```text
-Student baseline
-vs.
-Student + policy distillation
-```
-
----
-
-### Experiment 5 — Full WPT-Style Distillation
-
-Train using:
-
-```text
-planning loss
-+
-policy distillation
-+
-world-reward distillation
-```
-
-Compare:
-
-| Model | Policy KD | World-Reward KD | Expected role |
-|---|---:|---:|---|
-| Student baseline | ✗ | ✗ | baseline |
-| Student + Policy KD | ✓ | ✗ | ablation |
-| Student + Reward KD | ✗ | ✓ | ablation |
-| Full student | ✓ | ✓ | main method |
-| Teacher | — | — | upper reference |
-
----
-
-## Evaluation Metrics
-
-The primary metrics are related to **planning quality and deployment efficiency**, rather than classification accuracy.
-
-### Planning
-
-- **Average trajectory L2 error ↓**
-- **Collision rate ↓**
-- planning success / driving score where supported by the evaluation benchmark
-
-### Efficiency
-
-- **Inference latency ↓**
-- **FPS ↑**
-- parameter count ↓
-- peak VRAM ↓
-- FLOPs / compute when practical
-
-### Distillation
-
-Also report:
-
-```text
-Δ performance over student baseline
-Δ performance relative to teacher
-student / teacher latency ratio
-```
-
-The ideal result is:
-
-```text
-Student + WPT
-    ≫ baseline student performance
-    ≈ teacher planning quality
-    ≪ teacher/world-model inference cost
-```
-
----
-
-## Ablations
-
-Planned ablation experiments:
-
-1. remove policy distillation
-2. remove world-reward distillation
-3. vary reward-loss weight
-4. vary policy-distillation weight
-5. change number of teacher candidate trajectories
-6. compare different student capacities
-7. compare frozen vs partially trainable reward module
-
----
-
-## Repository Structure
-
-Planned layout:
-
-```text
-wpt-occworld/
-│
-├── README.md
-├── requirements.txt
-├── configs/
-│   ├── baseline.yaml
-│   ├── teacher.yaml
-│   ├── policy_kd.yaml
-│   └── full_wpt.yaml
-│
-├── data/
-│   └── README.md
-│
-├── models/
-│   ├── world_model.py
-│   ├── teacher_policy.py
-│   ├── student_policy.py
-│   └── reward_model.py
-│
-├── distillation/
-│   ├── policy_distillation.py
-│   ├── world_reward_distillation.py
-│   └── losses.py
-│
-├── datasets/
-│   └── nuscenes_dataset.py
-│
-├── evaluation/
-│   ├── planning_metrics.py
-│   ├── collision_metrics.py
-│   └── latency.py
-│
-├── scripts/
-│   ├── download_checkpoints.sh
-│   ├── train_student_baseline.sh
-│   ├── train_teacher.sh
-│   └── train_wpt.sh
-│
-├── train.py
-├── evaluate.py
-│
-├── tests/
-│   ├── test_world_model.py
-│   ├── test_reward_model.py
-│   └── test_distillation.py
-│
-└── results/
-    ├── tables/
-    ├── plots/
-    └── visualizations/
-```
-
----
-
-## Implementation Roadmap
-
-### Phase 1 — Environment
-
-- [ ] clone OccWorld
-- [ ] create compatible environment
-- [ ] download pretrained weights
-- [ ] download / prepare nuScenes
-- [ ] run official OccWorld evaluation
-- [ ] reproduce one provided visualization
-
-### Phase 2 — WPT Components
-
-- [ ] implement teacher policy
-- [ ] implement lightweight student
-- [ ] implement candidate trajectory generation
-- [ ] implement reward module
-- [ ] implement policy distillation
-- [ ] implement world-reward distillation
-
-### Phase 3 — Verification
-
-- [ ] unit-test loss functions
-- [ ] check all tensor dimensions
-- [ ] verify frozen OccWorld gradients
-- [ ] overfit 32–128 samples
-- [ ] visualize teacher/student trajectories
-
-### Phase 4 — Experiments
-
-- [ ] student baseline
-- [ ] teacher baseline
-- [ ] policy-KD ablation
-- [ ] reward-KD ablation
-- [ ] full WPT-style training
-- [ ] latency benchmark
-- [ ] final evaluation
-
-### Phase 5 — Research Report
-
-- [ ] results table
-- [ ] training curves
-- [ ] qualitative trajectory examples
-- [ ] ablation analysis
-- [ ] failure cases
-- [ ] limitations
-- [ ] reproducibility instructions
-
----
-
-## Results
-
-Results will be added after experiments.
-
-| Method | Trajectory L2 ↓ | Collision ↓ | Latency ↓ | Params |
-|---|---:|---:|---:|---:|
-| Student baseline | TBD | TBD | TBD | TBD |
-| Student + Policy KD | TBD | TBD | TBD | TBD |
-| Student + Reward KD | TBD | TBD | TBD | TBD |
-| **Full WPT-style student** | **TBD** | **TBD** | **TBD** | **TBD** |
-| Teacher | TBD | TBD | TBD | TBD |
-
----
-
-## Reproducibility Principles
-
-This repository aims to document:
-
-- all hyperparameters
-- random seeds
-- dataset splits
-- checkpoint versions
-- GPU type
-- training duration
-- dependency versions
-- failed experiments and implementation decisions
-
-The objective is not only to report a final number, but to make the independent implementation auditable and reproducible.
-
----
-
-## Project Status
-
-**Stage:** setup / implementation
-
-Current priority:
-
-```text
-nuScenes
-   ↓
-pretrained OccWorld
-   ↓
-verify world-model inference
-   ↓
-build student baseline
-   ↓
-implement WPT losses
-```
-
----
+Before reward implementation, resolve Eq. 11's apparent sign inconsistency, query alignment, norm reductions, shared reward normalization, loss weights, update schedules, and gradient boundaries. These are documented in [implementation notes](docs/implementation_notes.md), not filled in with arbitrary approximations.
 
 ## References
 
-```bibtex
-@article{jiang2025wpt,
-  title   = {WPT: World-to-Policy Transfer via Online World Model Distillation},
-  author  = {Jiang, Guangfeng and Luo, Yueru and Liu, Jun and Huang, Yi and
-             Zhu, Yiyao and Qu, Zhan and Chen, Dave Zhenyu and Liu, Bingbing
-             and Yan, Xu},
-  journal = {arXiv preprint arXiv:2511.20095},
-  year    = {2025}
-}
-```
-
-```bibtex
-@inproceedings{zheng2024occworld,
-  title     = {OccWorld: Learning a 3D Occupancy World Model for Autonomous Driving},
-  author    = {Zheng, Wenzhao and Chen, Weiliang and Huang, Yuanhui and
-               Zhang, Borui and Duan, Yueqi and Lu, Jiwen},
-  booktitle = {European Conference on Computer Vision},
-  year      = {2024}
-}
-```
-
----
-
-## Acknowledgements
-
-This project builds on the ideas introduced in **WPT** and uses the publicly released **OccWorld** model and pretrained checkpoint.
-
-The WPT methodology is independently implemented for research and educational purposes.
+- [WPT paper](https://arxiv.org/abs/2511.20095)
+- [OccWorld source and paper](https://github.com/wzzheng/OccWorld)
+- [Occ3D dataset](https://github.com/Tsinghua-MARS-Lab/Occ3D)
+- [nuScenes](https://www.nuscenes.org/)

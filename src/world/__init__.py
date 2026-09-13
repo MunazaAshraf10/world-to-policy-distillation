@@ -1,0 +1,1 @@
+"""Frozen world model integration."""
