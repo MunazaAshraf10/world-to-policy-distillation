@@ -1,0 +1,8 @@
+base: default.yaml
+experiment: occworld_vqvae
+world:
+  stage: vqvae
+  steps: 150000
+  batch_size: 16
+  warmup_steps: 200
+  eval_every: 15000

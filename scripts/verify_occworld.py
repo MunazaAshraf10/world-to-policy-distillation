@@ -1,55 +1,93 @@
-from __future__ import annotations
-
 import argparse
 import logging
-import sys
+import time
 from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+
+from src.data.cache import PlanningCache, open_world, pack_bev
+from src.reward.targets import bev_masks
+from src.utils.config import load_config
+from src.utils.repro import environment, git_revision, sha256, write_json
+from src.world.occworld import OccWorldAdapter, build_world_model
+from src.world.types import Rollout
+
+logger = logging.getLogger("verify_occworld")
+
+
+@torch.no_grad()
+def verify(paths: dict[str, str], checkpoint: Path, windows: int) -> dict[str, Any]:
+    """Stage 1: strict load, frozen parameters, finite outputs, determinism, cache parity."""
+    device = torch.device("cuda")
+    cache = Path(paths["cache"])
+    adapter = OccWorldAdapter(build_world_model(Path(paths["occworld_root"]), checkpoint, device))
+    adapter.assert_frozen()
+    data = PlanningCache(cache, "val", limit=windows)
+    world = open_world(cache, "val") if (cache / "val_world_codes.npy").is_file() else None
+    batch = {k: torch.stack([data[i][k] for i in range(windows)]) for k in data[0]}
+    inputs = (
+        batch["occ"].to(device).long(),
+        batch["rel_poses"].to(device),
+        batch["modes"].to(device),
+    )
+    torch.cuda.reset_peak_memory_stats()
+    start = time.time()
+    first = adapter.predict(*inputs)
+    torch.cuda.synchronize()
+    elapsed = time.time() - start
+    second = adapter.predict(*inputs)
+    checks = {
+        "frozen": not any(p.requires_grad for p in adapter.model.parameters()),
+        "eval_mode": not any(m.training for m in adapter.model.modules()),
+        "finite": bool(torch.isfinite(first.ego_disp).all()),
+        "deterministic": torch.equal(first.codes, second.codes)
+        and torch.equal(first.occupancy, second.occupancy),
+    }
+    if world is not None:
+        index = batch["index"].numpy()
+        bev = pack_bev(bev_masks(first.occupancy)).cpu().numpy()
+        checks["cache_matches_live"] = bool(
+            np.array_equal(world["codes"][index], first.codes.cpu().numpy())
+            and np.array_equal(world["bev"][index], bev)
+        )
+    rollout = Rollout()
+    report = {
+        "status": "passed" if all(checks.values()) else "failed",
+        "checks": checks,
+        "checkpoint": str(checkpoint),
+        "checkpoint_sha256": sha256(checkpoint),
+        "parameters": sum(p.numel() for p in adapter.model.parameters()),
+        "windows": windows,
+        "shapes": {
+            "codes": list(first.codes.shape),
+            "occupancy": list(first.occupancy.shape),
+            "ego_disp": list(first.ego_disp.shape),
+        },
+        "rollout": {"history": rollout.history, "future": rollout.future},
+        "seconds_per_window": elapsed / windows,
+        "peak_vram_gb": torch.cuda.max_memory_allocated() / 1e9,
+        "occupied_fraction": float((first.occupancy != 17).float().mean()),
+        "git": git_revision(Path(__file__).resolve().parents[1]),
+        "environment": environment(),
+    }
+    return report
 
 
 def main() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(project_root))
-    from src.verification.config import load_config
-    from src.verification.report import write_report
-    from src.verification.runner import preflight, run_verification, seed_run
-
-    parser = argparse.ArgumentParser(
-        description="Verify frozen OccWorld under its official conditioning protocol"
-    )
-    parser.add_argument("--config", type=Path, default=project_root / "configs/debug.yaml")
-    parser.add_argument("--checkpoint", type=Path)
-    parser.add_argument("--data-root", type=Path)
-    parser.add_argument("--infos", type=Path)
-    parser.add_argument("--sample-index", type=int)
-    parser.add_argument("--device")
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--preflight-only", action="store_true")
+    parser = argparse.ArgumentParser(description="Verify the frozen OccWorld integration")
+    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
+    parser.add_argument("--windows", type=int, default=4)
+    parser.add_argument("--output", type=Path, default=Path("results/occworld_verify.json"))
     args = parser.parse_args()
-    overrides = {
-        key: getattr(args, key)
-        for key in ("checkpoint", "data_root", "infos", "sample_index", "device", "output")
-    }
-    config = load_config(args.config, overrides, project_root)
-    if args.preflight_only and args.output is None:
-        parser.error("--preflight-only requires --output to keep its report separate from Stage 1")
-    if config.output.exists() and not args.overwrite:
-        raise FileExistsError(
-            f"Output exists: {config.output}; choose a new path or pass --overwrite"
-        )
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    logger = logging.getLogger("verification")
-    if args.preflight_only:
-        seed_run(config.seed)
-        report = preflight(config)
-        report["config"] = config.resolved()
-    else:
-        logger.info(
-            "Running official occupancy verification; future gt_mode conditioning is retained"
-        )
-        report = run_verification(config, project_root)
-    write_report(config.output, report, overwrite=args.overwrite)
-    logger.info("%s: %s", report["status"], config.output)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    report = verify(load_config(args.config)["paths"], args.checkpoint, args.windows)
+    write_json(args.output, report)
+    logger.info("%s %s -> %s", report["status"], report["checks"], args.output)
+    if report["status"] != "passed":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -1,41 +1,67 @@
 # Implementation notes
 
-## Stage 1 contract
+This file records every decision that the WPT paper (arXiv:2511.20095v2) leaves open or that follows from replacing Drive-OccWorld with OccWorld. Each entry states the choice and its consequence.
 
-OccWorld is pinned to commit 1ee7f77ecc4c984a4f7f6411d95c2e6e73806b6e. The adapter uses its TransVQVAE.forward_autoreg_with_pose method, with the official evaluation configuration's start_frame=0, mid_frame=5, end_frame=11. The model architecture retains num_frames=15. The dataset returns 12 occupancy grids, while the rollout uses five history frames and predicts six future frames; the extra last grid is retained for upstream API compatibility.
+## World model
 
-The actual prediction origin is window index 4. The upstream dataset's sample_idx uses index 5 for this configuration, and its scene_token is the scene's fixed fourth-index token rather than a general window identifier. Reports therefore preserve all window tokens and explicitly record history_last_token separately. No temporal shift is silently introduced.
+**Retrained OccWorld.** No pretrained OccWorld checkpoint is publicly reachable. The official Tsinghua cloud links return "Link does not exist" (upstream issues 37 and 39), and the VQVAE was never released (issue 26). We retrain OccWorld at commit 1ee7f77 with its own model, loss, and configuration code, unmodified, in two upstream stages: the VQVAE (config/train_vqvae.py), then the world transformer with the VQVAE frozen (config/train_occworld.py). Our single-GPU loop in src/training/occworld.py replaces upstream train.py, which requires a distributed launcher, compiled mmcv, and pre-2.6 torch.load defaults. We keep its optimizer (AdamW, lr 1e-3, weight decay 0.01), cosine schedule with warmup, and gradient clipping at 35. Batches are larger and the step budget is shorter than the paper's 200 epochs. Forecast quality is therefore expected to fall below the published OccWorld numbers, and results/ reports ours next to theirs. The schedule used here is 150k VQVAE steps of 16 frames (about 34% of upstream's frame passes) and 100k transformer steps of 4 windows (about 57%). Both use bf16 autocast; the VQVAE forward is compiled with torch.compile, while the transformer runs eagerly because compilation produces a misshaped gradient in its upstream code.
 
-Inputs retain the native spatial ordering [200,200,16], semantic labels 0–17, and class 17 as free space. Geometry is not transformed in Stage 1. Before reward integration, coordinate frames, voxel centers, drivable classes, ego footprints, and time alignment must be established explicitly.
+**Import shims.** The pinned dataset module imports mmdet3d boxes, and the planning metric imports a nuScenes Box it never uses. Neither participates in world model inference, and mmdet3d drags in compiled mmcv operators without Blackwell builds. src/world/occworld.py registers minimal stand-ins in sys.modules within the upstream import scope. The box stand-in exposes the raw tensor, which is the only attribute upstream reads.
 
-The exposed motion values are per-step displacements. They are not cumulative positions and are not the WPT teacher's candidate trajectories. OccWorld's three maneuver modes are distinct from a later teacher's configurable candidate count K.
+**History-only rollout.** forward_autoreg_with_pose encodes a full 12-frame window but seeds autoregression only from the five observed codes. The adapter pads the window with copies of the last observation, so future occupancy never enters the model, and leaves future displacement entries zero.
 
-## Conditioning and isolation
+**Privileged conditioning.** Upstream conditions the rollout on future driving commands (gt_mode, the nuScenes planning command), and its rel_poses input includes the last observed frame's next-step ego displacement. Both are kept because OccWorld was trained with them. The teacher and reward model, which consume the rollout, are therefore privileged, and this is acceptable only because neither is deployed. The student receives only the current command and the two past displacements, the standard nuScenes open-loop inputs.
 
-Upstream autoregression uses future gt_mode entries to select pose modes and feed them into subsequent world predictions. Stage 1 preserves this behavior. The upstream rel_poses field is built from each frame’s gt_ego_fut_trajs[0], including the last history frame’s next-step displacement. This annotated motion condition is also retained. Passing the verification does not establish observation-only forecasting or camera-only planning.
+**World cache.** OccWorld is frozen and its rollout decodes by argmax, so a single offline pass gives exactly the outputs that online calls would give; scripts/verify_occworld.py checks this equality. Per window we store the predicted codebook indices [6, 50, 50], BEV obstacle and drivable masks [6, 2, 200, 200], and predicted per-step ego displacements [6, 2]. Teacher, reward, and distillation training read this cache instead of calling OccWorld. WPT's online distillation is preserved in the sense the paper uses: the frozen teacher and reward model run in the loop on every student step.
 
-Upstream also accepts and encodes a sequence containing future occupancy targets. Only history codes seed its autoregressive predictor. The verifier independently perturbs all occupancy values and displacement annotations from mid_frame onward and checks that every returned prediction remains unchanged, with maneuver modes fixed. This is an empirical guard against future-target leakage on the tested sample, not a general proof.
+**World features.** WPT's F^w_{t+1} is Drive-OccWorld's predicted BEV feature. The OccWorld counterpart is the predicted quantized latent at 50 x 50 x 128, the exact tensor its VAE decoder consumes. We obtain it by looking up the cached indices in the frozen codebook, which src/world/encoder.py stores as a buffer.
 
-Preflight tests PyTorch CUDA matrix multiplication, OpenMMLab imports, and the MMCV rotated-box operator on CPU. The prebuilt MMCV 2.0.1 CUDA operator failed on this H100 with “no kernel image is available.” OccWorld's inspected rollout uses PyTorch operations rather than MMCV CUDA operators. Any later policy that requires those operators needs an H100-compatible build and a separate CUDA operator test.
+**Train split optimism.** The world model is trained on the nuScenes train split, so the rollouts used to train the teacher and reward model come from scenes it has seen. Validation rollouts are not affected.
 
-## Checkpoints and freezing
+## Data and coordinates
 
-The upstream evaluation configuration uses revise_ckpt=3, which routes loading to the VAE only. The adapter deliberately does not use that setting: it requires a full matching state dictionary for the VAE, transformer, pose encoder, pose decoder, and buffers. Only a uniform module. prefix is normalized. Missing, unexpected, malformed, nonfinite, or incompatible tensors are rejected before model state changes.
+**Windows.** We follow upstream's validation traversal: 12-frame windows, len(scene) - 12 per scene. The planning origin is window index 4, the last observed frame. Expert targets are that frame's gt_ego_fut_trajs (six 0.5 s steps in its LiDAR frame) with gt_ego_fut_masks. Upstream's own planning evaluation instead treats index 5 as the origin and chains each frame's first-step displacement; we do not reproduce that convention.
 
-All OccWorld parameters are frozen, stale gradients are cleared, and every module remains in evaluation mode. Prediction executes under torch.no_grad(). The upstream implementation's own detaches are retained. No optimizer, training loop, synthetic fallback, or partial checkpoint fallback exists.
+**Frames.** Trajectories live in the origin LiDAR frame (x right, y forward). Occ3D grids are ego frame, 200 x 200 x 16 at 0.4 m over [-40, 40] m. Points move between the two through the origin's lidar2ego extrinsics. Each predicted grid is centered on the ego at its own time step. A candidate point at step k is therefore shifted by the cumulative predicted ego displacement before lookup, ignoring yaw as upstream does.
 
-## Reporting
+## Policies
 
-The JSON report uses a deterministic filename and sorted keys. Runtime measurements naturally vary. It records full configuration, model configuration, code hashes, repository revisions and dirty state, checkpoint and metadata hashes, sample identity, conditioning, output statistics, and checks. Existing reports are preserved unless overwrite is explicitly requested.
+**Observations.** The paper's policies consume multi-view camera images through a BEVFormer encoder. Here the student consumes the five observed Occ3D occupancy grids plus the command and ego history, the same observation modality OccWorld uses. This keeps training within a single GPU budget. The resulting student is not camera based, and its numbers are not comparable to camera based rows in WPT Table 1.
 
-Reported time covers four forward calls plus assertions, excluding checkpoint/data loading. Peak allocated VRAM covers the verification sequence and retained reference tensors. Neither measurement is a deployment latency benchmark.
+**Teacher.** Following Eq. 8, the teacher's planning decoder attends to the predicted world tokens (six steps of 25 x 25 tokens with step embeddings), not to current features. It has K = 6 mode queries, trained by winner-takes-all L1, the usual multi-modal planning objective. The paper names neither K nor the teacher's imitation loss.
 
-## Deferred WPT decisions
+**Student.** One plan query refined by two decoder layers over 25 x 25 occupancy tokens; dimension 128.
 
-- Eq. 11 divides negative distances by their negative sum, cancelling the signs and apparently increasing target preference with error. The all-zero-distance case is also undefined. Preserve this discrepancy in review before choosing a corrected or literal experimental variant.
-- Eq. 15 specifies an L2 norm, not an interchangeable choice among MSE, cosine distance, and Smooth L1. Refined query identity, alignment, and reduction dimensions need specification.
-- Eq. 16 requires comparable rewards for a teacher candidate and a single student trajectory. A softmax over the student's singleton candidate set would always produce one; reward normalization must be resolved.
-- Teacher/reward update schedules, target detachment, gradients through the learned reward function, and loss weights remain unspecified here.
-- Predicted feature extraction and adaptation into teacher/reward dimensions require a later interface decision; semantic logits are not declared equivalent to WPT's latent world features.
+## Reward model
 
-Later work proceeds through a student baseline, multimodal teacher, reward supervision, each distillation loss independently, joint composition, and ablations. No stage beyond frozen verification is implemented or automatically launched.
+**Architecture.** Per candidate, a trajectory MLP embedding cross-attends to the reward model's own world tokens (Eq. 9), followed by an imitation logit and five simulation logits (Fig. 3). Candidates do not attend to each other. This keeps each candidate's network output independent of the rest of the set, which matters when the student trajectory is appended in Eq. 16.
+
+**Eq. 11.** As printed, softmax(-d_i / sum_j -d_j) equals softmax(d_i / sum_j d_j). The signs cancel, the target favors the farthest candidate, and the scale keeps it nearly uniform. We use softmax(-d_i / tau) with tau = 1 m, where d_i is the mean L2 distance over valid steps. The literal form remains available as reward.im_target: literal.
+
+**Eq. 14.** Evaluated on predicted probabilities, with logsigmoid for NC and DAC. The TTC, EP, and comfort blend is divided by 12 as in the NAVSIM PDM score, so its logarithm is at most zero. alpha = (1, 1, 1, 1) because the paper gives no values.
+
+**Selection.** Sec. 3.4 selects tau*_T by the final reward. We use Eq. 14 for both selection and distillation rather than the linear form of Eq. 10.
+
+**Simulation targets (App. 6.3).**
+- Rules are evaluated on the world model's predicted occupancy. Obstacles are columns containing classes 0 to 10.
+- Occ3D labels only observed voxels, so unseen road reads as free space. A column is therefore off road only when it holds an explicit non road class (other flat, sidewalk, terrain, manmade, vegetation) and neither road nor an object. A 3 x 3 closing removes isolated off road cells.
+- The ego footprint is 4.084 x 1.85 m, offset 0.5 m forward like upstream's collision metric, and sampled at 15 points. Points beyond the 40 m grid count as drivable and collision free.
+- EP is the final forward displacement, normalized by the set maximum when that exceeds 5 m (Eq. 19). "Batch" is read as the candidate set of one scene, matching NAVSIM's per-scene normalization.
+- TTC extends the final pose 10 m forward (Eq. 21).
+- Comfort applies the NAVSIM thresholds to derivatives of a least squares cubic through the origin and the six positions. Raw third differences at 2 Hz amplify annotation noise beyond the jerk bounds, and NAVSIM likewise filters before differentiating.
+
+**Target validation.** Before any training, the rules were checked on ground truth occupancy for 1,500 validation windows, with the expert trajectory scored against the ground truth future frames. The expert scores NC 0.968, DAC 0.991, and Comf 0.950. A version drifting laterally by 3 m falls to DAC 0.68 (0.24 at 6 m). Swapped or unrotated frame conventions reduce expert DAC on the current frame map, which fixes the LiDAR to Occ3D transform. The first versions of the rules gave the expert DAC 0.645 and Comf 0.642, which motivated both changes above.
+
+**Training.** The teacher and reward model train jointly for 12 epochs. Candidates are detached before scoring, so the reward losses update only the reward model and the teacher is shaped by imitation alone, as in Baseline-T.
+
+## Distillation
+
+**Eq. 15.** The student query (dimension 128) passes through a linear projector to the teacher dimension (256). It is matched by an unsquared L2 norm to the teacher's refined query for the reward selected mode. The projector exists only during training.
+
+**Eq. 16.** A single student trajectory makes the imitation softmax of Eq. 14 identically one. We therefore append the student trajectory to the teacher's candidate set and score all K + 1 jointly in the same predicted world. The loss is the absolute difference between the student's reward and that of tau*_T in this shared set, with the teacher reward detached. The reward model is frozen; gradients reach the student through its trajectory input. The literal objective also pulls a student whose reward exceeds the teacher's back down; we keep it as printed.
+
+**Schedule.** Table 8 lists separate teacher and student runs, which we read as two stages: teacher and reward first, then the student with both frozen. Loss weights are plan 1.0, policy 1.0, reward 0.5, fixed a priori. Ablations zero one weight at a time.
+
+## Evaluation
+
+L2 and collision rate come from upstream's PlanningMetric, fed with the origin frame's agent boxes and futures. We report the per-time value at each horizon (OccWorld and WPT tables) and the average up to the horizon (ST-P3 and VAD). Windows whose expert future is incomplete are skipped. Latency is measured at batch size 1 on the same GPU. The student path is measured alone; the teacher reference includes the OccWorld rollout.

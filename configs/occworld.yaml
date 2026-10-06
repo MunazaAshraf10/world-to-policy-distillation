@@ -1,0 +1,11 @@
+base: default.yaml
+experiment: occworld
+world:
+  stage: transformer
+  steps: 100000
+  batch_size: 4
+  # torch.compile mis-shapes a gradient in the upstream transformer.
+  compile: false
+  warmup_steps: 50
+  eval_every: 20000
+  vqvae_checkpoint: checkpoints/occworld_vqvae/last.pt

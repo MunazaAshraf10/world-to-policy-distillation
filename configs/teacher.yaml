@@ -1,0 +1,23 @@
+base: default.yaml
+experiment: teacher
+stage: teacher
+optim:
+  lr: 2.0e-4
+  epochs: 12
+  batch_size: 64
+loss:
+  wta: 1.0
+  im: 1.0
+  sim: 1.0
+teacher:
+  dim: 256
+  layers: 3
+  heads: 8
+  modes: 6
+reward:
+  dim: 256
+  layers: 2
+  heads: 8
+  alpha: [1.0, 1.0, 1.0, 1.0]
+  im_temperature: 1.0
+  im_target: corrected

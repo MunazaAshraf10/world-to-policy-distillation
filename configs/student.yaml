@@ -1,0 +1,14 @@
+base: default.yaml
+experiment: student_baseline
+stage: student
+optim:
+  lr: 2.0e-4
+  epochs: 24
+  batch_size: 64
+loss:
+  plan: 1.0
+student:
+  dim: 128
+  widths: [32, 64, 128]
+  layers: 2
+  heads: 4

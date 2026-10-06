@@ -1,103 +1,94 @@
-# WPT with frozen OccWorld
+# WPT on a frozen OccWorld
 
-This repository implements a staged adaptation of **World-to-Policy Transfer via Online World Model Distillation (WPT)** using pretrained **OccWorld** in place of Drive-OccWorld. The goal is to transfer world-informed planning knowledge into a student policy that runs independently at deployment.
+This repository adapts World-to-Policy Transfer (WPT, [arXiv:2511.20095](https://arxiv.org/abs/2511.20095)) to OccWorld on nuScenes. A frozen OccWorld rolls out future occupancy. A multi-modal teacher plans on that predicted world and a learned reward model scores its candidates. Policy query distillation and world reward distillation then compress this guidance into a compact student, which plans without the world model, the teacher, or the reward model.
 
-**Current scope: Stage 1, frozen OccWorld verification.** The adapter, sample loader, verification CLI, tests, and reproducibility reports are implemented. No teacher, student, reward model, distillation loss, or training run is implemented yet. Stage 1 is not accepted until a real pretrained checkpoint-backed rollout passes.
+It is an adaptation, not a reproduction. WPT uses Drive-OccWorld and camera based policies. Here the world model is OccWorld (pinned at [1ee7f77](https://github.com/wzzheng/OccWorld/tree/1ee7f77ecc4c984a4f7f6411d95c2e6e73806b6e), unmodified, retrained because no pretrained checkpoint is reachable), and the policies observe Occ3D occupancy. None of the paper's reported numbers are claimed.
 
-Validation completed: **35 tests passed**, one real integration test skipped, and the downloaded occupancy window passed the upstream data loader. See [verification status](docs/verification_status.md) for evidence and the remaining checkpoint blocker.
+## Method
 
-The local [WPT paper](WPT.pdf) is arXiv:2511.20095v2, March 18, 2026. The [OccWorld submodule](OccWorld) is pinned to `1ee7f77ecc4c984a4f7f6411d95c2e6e73806b6e` and is kept unchanged.
-
-## Intended training architecture
-
-```text
-nuScenes history
-    |
-    +-- historical occupancy + motion metadata --> frozen OccWorld
-    |                                                |
-    |                                         predicted future world
-    |                                                |
-    |                              +-----------------+----------------+
-    |                              |                                  |
-    |                       teacher plan decoder                 reward model
-    |                              |                                  ^
-    |                   planning representations                      |
-    |                   + candidate trajectories ---------------------+
-    |                              |                                  |
-    |                              |                           best teacher reward
-    |                              v                                  |
-    |                     policy distillation                 reward distillation
-    |                              ^                                  ^
-    |                              |                                  |
-    +--> student encoder + decoder +--> student trajectory --> same reward model
+```
+observed occupancy, command, ego history
+  ├─► frozen OccWorld ─► predicted latents F^w_{t+1}, predicted occupancy
+  │                        ├─► teacher P_D(Q^T, F^w_{t+1}) ─► K candidates, queries Q^T
+  │                        └─► reward model (Eq. 9) ─► imitation + 5 simulation scores ─► r_final (Eq. 14)
+  │                                                     └─► tau*_T = argmax r_final
+  └─► student P_D(Q^S, F^w) ─► trajectory, query Q^S
+          ├─ policy distillation    ||P(Q^S) - Q^T[tau*]||_2         (Eq. 15)
+          └─ reward distillation    |r_final(tau^S) - r_final(tau*_T)| (Eq. 16)
 ```
 
-The teacher's planning decoder uses predicted world features (WPT Eq. 8). Policy distillation matches planning representations (Eq. 15). World reward distillation compares the student's trajectory reward with the best teacher reward (Eq. 16). Selection of a teacher trajectory is not itself the policy distillation loss.
+Training runs in stages:
+1. Retrain OccWorld: VQVAE, then the world transformer.
+2. Cache its rollouts once. The model is frozen and decodes by argmax, so the cache is exact.
+3. Train a student baseline.
+4. Train the teacher and the reward model jointly.
+5. Train the student with the teacher and reward model frozen and running online.
 
-For the initial official OccWorld protocol, future `gt_mode` conditioning also enters the world model. The full [paper mapping and diagram](docs/paper_mapping.md) makes that dependency explicit.
+The teacher's simulation targets (NC, DAC, EP, TTC, comfort; App. 6.3) are computed on the world model's predicted occupancy.
 
-At deployment, the intended path is simply observations → student → trajectory. The student must not initialize or call OccWorld, the teacher, or the reward model.
+[docs/paper_mapping.md](docs/paper_mapping.md) maps every component to its equation and source file. [docs/implementation_notes.md](docs/implementation_notes.md) records every choice the paper leaves open, including:
+- the sign error in Eq. 11
+- the singleton softmax problem in Eq. 16
+- the privileged conditioning OccWorld gives the teacher
+- the occlusion-aware drivable area used for DAC
 
-## Stage 1 setup
+## Repository
 
-See [setup and asset instructions](docs/setup.md) for the isolated Python 3.8 environment, exact package versions, downloads, and tests. The existing system PyTorch environment remains unchanged.
+```
+configs/   stage configs; any value can be overridden with --set key=value
+scripts/   download_data.sh, build_cache, train, verify_occworld, evaluate, benchmark
+src/world      OccWorld adapter, import shims, world feature encoder
+src/data       Occ3D windows and memmap caches
+src/policy     occupancy encoder, plan decoder and head, student, teacher
+src/reward     reward model and rule based simulation targets
+src/losses     planning, reward, policy distillation, reward distillation, total
+src/training   policy trainer, per-stage steps, OccWorld retraining
+src/evaluation STP3 planning metric, forecast IoU, latency
+tests/     CPU unit tests for the WPT components; GPU integration test for OccWorld
+```
+
+## Usage
+
+Setup, data provenance with checksums, and the full command sequence are in [docs/setup.md](docs/setup.md). In short:
 
 ```bash
-.venv-occworld/bin/python scripts/verify_occworld.py \
-  --preflight-only --output results/occworld_stage1/preflight.json
+git submodule update --init OccWorld && uv sync
+scripts/download_data.sh data
+uv run python -m scripts.build_cache inputs
+uv run python -m scripts.train --config configs/occworld_vqvae.yaml
+uv run python -m scripts.train --config configs/occworld.yaml
+uv run python -m scripts.build_cache world --checkpoint checkpoints/occworld/last.pt
+uv run python -m scripts.train --config configs/student.yaml
+uv run python -m scripts.train --config configs/teacher.yaml
+uv run python -m scripts.train --config configs/wpt.yaml
+uv run python -m scripts.evaluate --checkpoint checkpoints/wpt_full/best.pt
 ```
 
-The real rollout requires explicit asset paths:
+Everything targets a single 32 GB GPU. Retraining OccWorld dominates the cost: about 8 hours for the VQVAE and 12 for the transformer on an RTX 5090. Each policy stage takes one to a few hours.
 
-```bash
-.venv-occworld/bin/python scripts/verify_occworld.py \
-  --checkpoint checkpoints/occworld/full.pth \
-  --data-root data/nuscenes \
-  --infos data/nuscenes_infos_val_temporal_v3_scene.pkl
-```
+## Evaluation
 
-The checkpoint filename above is a required input, not a bundled asset. The original checkpoint share currently reports “Link does not exist”; see [upstream issue 39](https://github.com/wzzheng/OccWorld/issues/39). A metadata copy is available through DOME; its distinct provenance and checksum are documented in the setup guide. A DOME model checkpoint cannot substitute for pretrained OccWorld.
+Open-loop planning on the 4,219 nuScenes validation windows of the OccWorld protocol. Metrics:
+- L2 error and collision rate at 1, 2, and 3 s, through OccWorld's STP3 planning metric. Both the per-time convention (used in the OccWorld and WPT tables) and the cumulative ST-P3 convention are reported.
+- Student and teacher pipeline latency at batch size 1, and parameter counts.
 
-The verifier uses one official validation window: 12 occupancy grids, five history frames, and six predictions at 0.5-second intervals. It loads every checkpoint parameter and buffer, freezes the entire model, and checks shape, finite values, adapter/direct parity, and isolation from future occupancy and displacement targets.
+Each result file in results/ stores its full configuration, checkpoint hash, git revision, and environment.
 
-| Output | Shape |
-| --- | --- |
-| Semantic labels | `[1,6,200,200,16]` |
-| Semantic logits | `[1,6,200,200,16,18]` |
-| Ego displacement modes | `[1,6,3,2]` |
-| Selected ego displacements | `[1,6,2]` |
+## Results
 
-Spatial axes and per-step displacement semantics remain unchanged. Future `gt_mode` values are retained exactly as in upstream inference; this is an official-protocol verification, not observation-only forecasting. Future occupancy and displacement annotations are independently perturbed to check that predictions do not depend on them.
+No results have been produced yet. This section will list the student baseline, policy-only and reward-only distillation, full WPT, and the teacher reference, together with the retrained OccWorld's forecast quality next to the published checkpoint's.
 
-Results are written to `results/occworld_stage1/summary.json`, with configuration, source and asset hashes, sample identity, conditioning, tensor statistics, checks, software versions, GPU, elapsed time, and peak allocated VRAM. An existing report is preserved unless `--overwrite` is specified. Only a report with `status: stage1_passed` establishes acceptance.
+## Limitations
 
-## Tests
-
-```bash
-.venv-occworld/bin/python -m pytest -q
-.venv-occworld/bin/ruff check src scripts tests
-.venv-occworld/bin/ruff format --check src scripts tests
-```
-
-The real integration test is skipped unless `--integration-config` identifies a YAML file with actual asset paths. A skipped integration test is not a successful Stage 1 run. Small test fixtures verify adapter contracts only and cannot be selected by the production CLI.
-
-## Research roadmap
-
-1. Complete frozen OccWorld verification with a full pretrained checkpoint.
-2. Establish a lightweight student baseline without distillation.
-3. Implement a teacher decoder conditioned on predicted future world features.
-4. Implement separate imitation and simulation reward supervision.
-5. Implement policy distillation and evaluate its ablation.
-6. Implement world reward distillation and evaluate its ablation.
-7. Compose full WPT adaptation training and compare all controlled variants.
-
-Later evaluation will report trajectory L2 and collision rates at 1, 2, and 3 seconds, plus latency, parameter count, VRAM, and GPU hours. No reproduction metrics or speedup claims are currently made.
-
-Before reward implementation, resolve Eq. 11's apparent sign inconsistency, query alignment, norm reductions, shared reward normalization, loss weights, update schedules, and gradient boundaries. These are documented in [implementation notes](docs/implementation_notes.md), not filled in with arbitrary approximations.
+- OccWorld is retrained on a shortened schedule, so its forecasts are weaker than the original checkpoint's.
+- The policies observe ground truth Occ3D occupancy rather than camera images, so the results are not comparable to camera based planners.
+- The teacher and reward model are privileged: OccWorld's rollout is conditioned on future driving commands and on the first future ego displacement. This affects only training signals, never the deployed student.
+- Loss weights, the number of candidates, and feature sizes are a priori choices; the paper does not report them.
+- nuScenes open-loop metrics are known to reward ego-status shortcuts. The student sees only the command and two past displacements.
 
 ## References
 
-- [WPT paper](https://arxiv.org/abs/2511.20095)
-- [OccWorld source and paper](https://github.com/wzzheng/OccWorld)
-- [Occ3D dataset](https://github.com/Tsinghua-MARS-Lab/Occ3D)
-- [nuScenes](https://www.nuscenes.org/)
+- Jiang et al., WPT: World-to-Policy Transfer via Online World Model Distillation, arXiv:2511.20095.
+- Zheng et al., OccWorld: Learning a 3D Occupancy World Model for Autonomous Driving, ECCV 2024.
+- Tian et al., Occ3D: A Large-Scale 3D Occupancy Prediction Benchmark for Autonomous Driving, NeurIPS 2023.
+- Caesar et al., nuScenes: A Multimodal Dataset for Autonomous Driving, CVPR 2020.

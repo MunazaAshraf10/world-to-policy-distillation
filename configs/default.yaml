@@ -1,0 +1,8 @@
+seed: 0
+paths:
+  occworld_root: OccWorld
+  data_root: data/nuscenes
+  infos_train: data/nuscenes_infos_train_temporal_v3_scene.pkl
+  infos_val: data/nuscenes_infos_val_temporal_v3_scene.pkl
+  cache: cache
+  checkpoints: checkpoints

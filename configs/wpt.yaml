@@ -1,0 +1,28 @@
+base: default.yaml
+experiment: wpt_full
+stage: wpt
+optim:
+  lr: 2.0e-4
+  epochs: 12
+  batch_size: 64
+loss:
+  plan: 1.0
+  policy: 1.0
+  reward: 0.5
+paths:
+  teacher_checkpoint: checkpoints/teacher/best.pt
+student:
+  dim: 128
+  widths: [32, 64, 128]
+  layers: 2
+  heads: 4
+teacher:
+  dim: 256
+  layers: 3
+  heads: 8
+  modes: 6
+reward:
+  dim: 256
+  layers: 2
+  heads: 8
+  alpha: [1.0, 1.0, 1.0, 1.0]

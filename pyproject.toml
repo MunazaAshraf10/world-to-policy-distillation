@@ -1,13 +1,53 @@
+[project]
+name = "wpt-occworld"
+version = "0.1.0"
+description = "World-to-Policy Transfer adapted to a frozen OccWorld world model on nuScenes"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+dependencies = [
+    "einops>=0.8.2",
+    "matplotlib>=3.11.2",
+    "mmengine>=0.10.7",
+    "numpy>=2.5.3",
+    "opencv-python-headless>=5.0.0.93",
+    "pyquaternion>=0.9.9",
+    "pyyaml>=6.0.3",
+    "scikit-image>=0.26.0",
+    "scipy>=1.18.1",
+    "torch>=2.11.0",
+    "tqdm>=4.70.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["integration: requires the official checkpoint, data, and CUDA"]
+markers = ["integration: requires a trained OccWorld checkpoint, Occ3D data, and CUDA"]
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py312"
 line-length = 100
-include = ["src/**/*.py", "scripts/*.py", "tests/*.py", "pyproject.toml"]
-extend-exclude = ["OccWorld", ".venv-occworld"]
+extend-exclude = ["OccWorld"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["src.world.types.Rollout"]
