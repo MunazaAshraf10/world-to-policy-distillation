@@ -3,7 +3,7 @@ experiment: student_baseline
 stage: student
 optim:
   lr: 2.0e-4
-  epochs: 24
+  epochs: 12
   batch_size: 64
 loss:
   plan: 1.0

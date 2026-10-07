@@ -15,7 +15,7 @@ from src.data.cache import PlanningCache
 from src.evaluation.planning import evaluate_trajectories
 from src.losses.total import total_loss
 from src.policy.student import Student, StudentConfig
-from src.policy.teacher import Teacher, TeacherConfig
+from src.policy.teacher import Teacher, TeacherConfig, trajectory_anchors
 from src.reward.model import RewardConfig, RewardModel
 from src.reward.targets import SimConfig
 from src.training.steps import Batch, select_best, student_step, teacher_step, wpt_step
@@ -67,6 +67,13 @@ def build_models(cfg: dict[str, Any], stage: str, codebook: torch.Tensor) -> dic
         )
         load_frozen(models, Path(cfg["paths"]["teacher_checkpoint"]))
     return models
+
+
+def fit_anchors(data: PlanningCache, k: int, seed: int) -> torch.Tensor:
+    """Teacher mode anchors from the expert trajectories of fully observed training windows."""
+    target = data.windows["target"][: len(data)]
+    full = data.windows["target_mask"][: len(data)].all(axis=1)
+    return trajectory_anchors(torch.from_numpy(target[full]).cumsum(dim=1), k, seed=seed)
 
 
 def cosine_schedule(
@@ -125,9 +132,12 @@ class Trainer:
         self.train_set = PlanningCache(cache, "train", world=world, limit=self.optim.limit)
         self.val_set = PlanningCache(cache, "val", world=world, limit=cfg.get("val_limit"))
         codebook = load_codebook(cache) if world else torch.empty(0)
-        self.models = {
-            k: m.to(self.device) for k, m in build_models(cfg, self.stage, codebook).items()
-        }
+        models = build_models(cfg, self.stage, codebook)
+        if self.stage == "teacher":
+            teacher = models["teacher"]
+            teacher.anchors.copy_(fit_anchors(self.train_set, teacher.cfg.modes, int(cfg["seed"])))
+            logger.info("Teacher anchor endpoints %s", teacher.anchors[:, -1].tolist())
+        self.models = {k: m.to(self.device) for k, m in models.items()}
         self.params = [p for m in self.models.values() for p in m.parameters() if p.requires_grad]
 
     def loader(self, dataset: PlanningCache, train: bool) -> DataLoader:

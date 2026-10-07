@@ -9,7 +9,7 @@ from src.data.cache import pack_bev
 from src.losses.policy_distill import policy_loss
 from src.losses.total import total_loss
 from src.policy.student import Student, StudentConfig
-from src.policy.teacher import Teacher, TeacherConfig
+from src.policy.teacher import Teacher, TeacherConfig, trajectory_anchors
 from src.reward.model import RewardConfig, RewardModel, final_reward
 from src.reward.targets import SimConfig, simulation_targets
 from src.training.steps import teacher_step, wpt_step
@@ -55,6 +55,25 @@ def test_output_shapes(models: dict[str, nn.Module], batch: dict[str, torch.Tens
     scores = models["reward"](batch["codes"], teacher.traj_set)
     assert scores.im_logit.shape == (B, K) and scores.sim_logit.shape == (B, K, 5)
     assert torch.isfinite(final_reward(scores, (1.0, 1.0, 1.0, 1.0), 1e-6)).all()
+
+
+def test_anchors_recover_separated_trajectories() -> None:
+    torch.manual_seed(0)
+    ends = torch.tensor([[0.0, 0.0], [-8.0, 20.0], [8.0, 20.0]])
+    steps = torch.linspace(1 / T, 1, T)[:, None]
+    traj = (ends[:, None] * steps).repeat_interleave(50, dim=0) + 0.1 * torch.randn(150, T, 2)
+    anchors = trajectory_anchors(traj, k=3)
+    found = anchors[:, -1][anchors[:, -1, 0].argsort()]
+    assert torch.allclose(found, ends[ends[:, 0].argsort()], atol=0.2)
+
+
+def test_teacher_candidates_stay_distinct(batch: dict[str, torch.Tensor]) -> None:
+    torch.manual_seed(0)
+    teacher = Teacher(TeacherConfig(dim=32, layers=1, heads=2, modes=K), torch.randn(512, 16))
+    teacher.anchors.copy_(torch.linspace(-5.0, 5.0, K)[:, None, None].expand(K, T, 2))
+    traj_set = teacher(batch["codes"], batch["command"], batch["ego_hist"]).traj_set
+    spread = (traj_set[:, :, None] - traj_set[:, None]).norm(dim=-1).mean(-1)
+    assert spread[:, ~torch.eye(K, dtype=torch.bool)].min() > 1.0
 
 
 def test_policy_loss_vanishes_for_identical_queries() -> None:
