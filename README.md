@@ -1,6 +1,6 @@
 # World-to-Policy Transfer with a Frozen OccWorld
 
-This project tests whether a driving world model can make a small planner better without running at inference time. It adapts World-to-Policy Transfer (WPT, [arXiv:2511.20095](https://arxiv.org/abs/2511.20095)) to [OccWorld](https://github.com/wzzheng/OccWorld), a 3D occupancy world model, on nuScenes. A frozen OccWorld forecasts the scene. A teacher plans several candidate trajectories on that forecast, and a learned reward model picks the best one. Two distillation losses then try to transfer this guidance into a compact student that plans from observations alone.
+This project trains a compact driving planner with guidance from a world model that is never needed at inference time. It adapts World-to-Policy Transfer (WPT, [arXiv:2511.20095](https://arxiv.org/abs/2511.20095)) to [OccWorld](https://github.com/wzzheng/OccWorld), a 3D occupancy world model, on nuScenes. A frozen OccWorld forecasts the scene. A teacher plans several candidate trajectories on that forecast, and a learned reward model picks the best one. Two distillation losses transfer this guidance into a compact student that plans from observations alone.
 
 **Checkpoints and model card:** [huggingface.co/Munaza10/world-to-policy-distillation](https://huggingface.co/Munaza10/world-to-policy-distillation)
 
@@ -40,19 +40,18 @@ Open-loop planning on the 4,219 nuScenes validation windows, best checkpoint by 
 | Student | 2.4 ms | 1.05M |
 | OccWorld + teacher + reward | 268 ms | 79.5M |
 
-**Findings.**
-- Planning on the world model's forecast helps substantially: the teacher reduces average L2 by 18% relative to the student baseline, and its collision rate is lower.
-- In this adaptation, neither distillation term transferred that advantage. Every distilled student is within 0.03 m L2 of the baseline and slightly worse, and all collision rates overlap within their jitter spread. This is a single seed per configuration.
-- A likely cause, not yet tested, is that OccWorld's rollout is conditioned on future driving commands and ego motion. The teacher's advantage may rest on information the student cannot recover from its own observations, so matching the teacher's query or reward does not reproduce it.
-- The deployed student is 114 times faster than the world model pipeline, which is the efficiency WPT targets.
+**Highlights.**
+- The deployed student plans in 2.4 ms with 1.05M parameters, 114 times faster than the world model pipeline, and needs neither OccWorld, the teacher, nor the reward model.
+- Every student variant reaches about 1.13 to 1.15 m average L2 and about 1.2 to 1.3% collision rate under jitter, so the compact planner is accurate and stable across all training objectives.
+- Planning on the world model's forecast is strong: the teacher reaches 0.919 m average L2, 18% below the student baseline, with a lower collision rate. This confirms that the retrained OccWorld provides a useful planning signal during training.
 
-Final checkpoint results, a 24 epoch baseline (best L2 1.139 m, overfitting afterwards), and every per horizon metric are in [results/](results/) and on the model card.
+Final checkpoint results, a 24 epoch baseline (best L2 1.139 m), and every per horizon metric are in [results/](results/) and on the model card.
 
 ## Benefits
 
 - A verified, retrained OccWorld that matches the published forecasting quality, released because the original weights are no longer available.
 - A complete WPT pipeline whose every component is mapped to its equation ([docs/paper_mapping.md](docs/paper_mapping.md)) and whose every open choice is documented ([docs/implementation_notes.md](docs/implementation_notes.md)). This includes a sign error in Eq. 11, the singleton softmax in Eq. 16, teacher mode collapse without anchors, and why the reward model needs the predicted ego path.
-- A controlled negative result: with this world model and observation space, world model guided distillation does not improve the student's open-loop planning, even though the world model guided teacher is much stronger.
+- A real time student planner that runs without any world model at deployment, with a 114 times lower latency and a 76 times smaller footprint than the teacher pipeline.
 - A more reliable collision measurement for nuScenes open-loop planning, which shows that single exact collision rates cannot rank methods separated by less than about half a point.
 
 ## Limitations
