@@ -40,6 +40,7 @@ class WorldTrainConfig:
     weight_decay: float = 0.01
     warmup_steps: int = 200
     grad_clip: float = 35.0
+    max_skips: int = 10
     bf16: bool = True
     compile: bool = True
     workers: int = 8
@@ -140,6 +141,14 @@ class WorldTrainer:
             inputs[key] = out[source]
         return self.loss(inputs)
 
+    def nonfinite_grads(self) -> list[str]:
+        """Names of trainable parameters whose gradient holds NaN or Inf."""
+        return [
+            name
+            for name, p in self.model.named_parameters()
+            if p.grad is not None and not torch.isfinite(p.grad).all()
+        ]
+
     def state(self) -> dict[str, torch.Tensor]:
         if self.train_cfg.stage == "vqvae":
             return {f"vae.{k}": v for k, v in self.model.state_dict().items()}
@@ -205,16 +214,34 @@ class WorldTrainer:
         self.model.train()
         torch.cuda.reset_peak_memory_stats()
         step, start, history = 0, time.time(), []
+        skipped, streak = 0, 0
         while step < tc.steps:
             for batch in loader:
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=tc.bf16):
                     loss, parts = self.forward(batch)
-                if not math.isfinite(loss.item()):
-                    raise FloatingPointError(f"Nonfinite loss at step {step}: {parts}")
                 optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.params, tc.grad_clip)
-                optimizer.step()
+                finite = math.isfinite(loss.item())
+                if finite:
+                    loss.backward()
+                    grads = [p.grad for p in self.params if p.grad is not None]
+                    norm = torch.nn.utils.get_total_norm(grads)
+                    finite = bool(torch.isfinite(norm))
+                if finite:
+                    torch.nn.utils.clip_grads_with_norm_(self.params, tc.grad_clip, norm)
+                    optimizer.step()
+                    streak = 0
+                else:
+                    # As mixed precision training does, drop the update instead of writing NaN.
+                    skipped, streak = skipped + 1, streak + 1
+                    loss = loss.detach()
+                    logger.warning(
+                        "Skipped update at step %d: %s, nonfinite grads in %s",
+                        step,
+                        parts,
+                        self.nonfinite_grads(),
+                    )
+                    if streak > tc.max_skips:
+                        raise FloatingPointError(f"{streak} consecutive nonfinite steps at {step}")
                 schedule.step()
                 step += 1
                 if step % tc.log_every == 0:
@@ -239,6 +266,7 @@ class WorldTrainer:
             "experiment": self.cfg["experiment"],
             "world": asdict(tc),
             "history": history,
+            "skipped_updates": skipped,
             "train_hours": (time.time() - start) / 3600,
             "peak_vram_gb": torch.cuda.max_memory_allocated() / 1e9,
             "git": git_revision(self.root),

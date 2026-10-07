@@ -10,4 +10,4 @@ __pycache__/
 .env
 CLAUDE.md
 CODEX.md
-AGENT.md
+AGENTS.md
