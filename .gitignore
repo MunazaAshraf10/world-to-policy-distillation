@@ -6,7 +6,6 @@ __pycache__/
 /data/
 /cache/
 /checkpoints/
-/results/
 .env
 CLAUDE.md
 CODEX.md

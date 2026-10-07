@@ -1,0 +1,26 @@
+{
+  "batch_size": 1,
+  "environment": {
+    "cuda": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "hostname": "588ffea9d5dd",
+    "pid": 708195,
+    "python": "3.12.3",
+    "torch": "2.11.0+cu128"
+  },
+  "speedup": 113.7110699637906,
+  "student": {
+    "mean_ms": 2.35783935546875,
+    "p50_ms": 2.3534560203552246,
+    "p90_ms": 2.384767937660217,
+    "parameters": 1050780,
+    "peak_vram_gb": 0.578627584
+  },
+  "teacher_pipeline": {
+    "mean_ms": 268.11243591308596,
+    "p50_ms": 267.67724609375,
+    "p90_ms": 268.8913238525391,
+    "parameters": 79502140,
+    "peak_vram_gb": 1.428211712
+  }
+}

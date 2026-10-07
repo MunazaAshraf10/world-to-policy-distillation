@@ -1,0 +1,34 @@
+{
+  "batch_size": 4,
+  "checkpoint": "checkpoints/occworld/world.pt",
+  "checkpoint_sha256": "e8d8ba0ec542d3a1db7bdcdaa1c3d33ac0c384b2667006703c1f2b525608aedb",
+  "environment": {
+    "cuda": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "hostname": "588ffea9d5dd",
+    "pid": 519035,
+    "python": "3.12.3",
+    "torch": "2.11.0+cu128"
+  },
+  "git": {
+    "commit": "fd3d155bdcc5206855ed4f355f1fd83048545bf5",
+    "dirty": false
+  },
+  "metrics": {
+    "iou_1": 43.03848648071289,
+    "iou_2": 34.48347473144531,
+    "iou_3": 28.97644805908203,
+    "iou_4": 25.268653869628906,
+    "iou_5": 22.53830337524414,
+    "iou_6": 20.51260757446289,
+    "iou_mean": 29.136327743530273,
+    "miou_1": 36.864139556884766,
+    "miou_2": 25.46958351135254,
+    "miou_3": 19.124187469482422,
+    "miou_4": 15.143987655639648,
+    "miou_5": 12.443861961364746,
+    "miou_6": 10.57741641998291,
+    "miou_mean": 19.937196731567383
+  },
+  "windows": 4219
+}

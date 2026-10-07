@@ -1,0 +1,53 @@
+{
+  "checkpoint": "checkpoints/occworld/world.pt",
+  "checkpoint_sha256": "e8d8ba0ec542d3a1db7bdcdaa1c3d33ac0c384b2667006703c1f2b525608aedb",
+  "checks": {
+    "cache_matches_live": true,
+    "deterministic": true,
+    "eval_mode": true,
+    "finite": true,
+    "frozen": true
+  },
+  "environment": {
+    "cuda": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "hostname": "588ffea9d5dd",
+    "pid": 516590,
+    "python": "3.12.3",
+    "torch": "2.11.0+cu128"
+  },
+  "git": {
+    "commit": "ea2e4db5f7302db943dcc211790b7716c7e87abc",
+    "dirty": true
+  },
+  "occupied_fraction": 0.053526073694229126,
+  "parameters": 72385578,
+  "peak_vram_gb": 18.182498304,
+  "rollout": {
+    "future": 6,
+    "history": 5
+  },
+  "seconds_per_window": 0.24488304555416107,
+  "shapes": {
+    "codes": [
+      16,
+      6,
+      50,
+      50
+    ],
+    "ego_disp": [
+      16,
+      6,
+      2
+    ],
+    "occupancy": [
+      16,
+      6,
+      200,
+      200,
+      16
+    ]
+  },
+  "status": "passed",
+  "windows": 16
+}

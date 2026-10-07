@@ -1,0 +1,83 @@
+{
+  "checkpoint": "checkpoints/student_baseline/best.pt",
+  "checkpoint_sha256": "5eedf6e78dffc365dbdc27e4cacf0757c85f5fdffc53f32f13d7ed0655ed08ab",
+  "config": {
+    "experiment": "student_baseline",
+    "loss": {
+      "plan": 1.0
+    },
+    "optim": {
+      "batch_size": 64,
+      "epochs": 12,
+      "lr": 0.0002
+    },
+    "paths": {
+      "cache": "cache",
+      "checkpoints": "checkpoints",
+      "data_root": "data/nuscenes",
+      "infos_train": "data/nuscenes_infos_train_temporal_v3_scene.pkl",
+      "infos_val": "data/nuscenes_infos_val_temporal_v3_scene.pkl",
+      "occworld_root": "OccWorld"
+    },
+    "seed": 0,
+    "stage": "student",
+    "student": {
+      "dim": 128,
+      "heads": 4,
+      "layers": 2,
+      "widths": [
+        32,
+        64,
+        128
+      ]
+    }
+  },
+  "deployed": [
+    "student"
+  ],
+  "environment": {
+    "cuda": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "hostname": "588ffea9d5dd",
+    "pid": 713899,
+    "python": "3.12.3",
+    "torch": "2.11.0+cu128"
+  },
+  "epoch": 9,
+  "experiment": "student_baseline",
+  "git": {
+    "commit": "54b0648943af41ca41371f607260aa3b4de1bc72",
+    "dirty": true
+  },
+  "metrics": {
+    "box_col_1s": 0.5214505807063285,
+    "box_col_1s_single": 0.6162597771983882,
+    "box_col_2s": 0.6695899502251719,
+    "box_col_2s_single": 0.8769850675515525,
+    "box_col_3s": 1.0073477229706962,
+    "box_col_3s_single": 2.0383977245792844,
+    "box_col_avg": 0.7327960846340655,
+    "box_col_avg_jitter_mean": 0.7041228902128491,
+    "box_col_avg_jitter_std": 0.04531737877933481,
+    "box_col_avg_single": 1.1772141897764083,
+    "box_col_avg_single_jitter_mean": 1.2076321403176107,
+    "box_col_avg_single_jitter_std": 0.10807818123185915,
+    "col_1s": 1.4339890969424034,
+    "col_1s_single": 1.4458402465039109,
+    "col_2s": 1.3925100734771272,
+    "col_2s_single": 1.2562218535197913,
+    "col_3s": 1.323378392660553,
+    "col_3s_single": 1.066603460535672,
+    "col_avg": 1.3832925210266946,
+    "col_avg_single": 1.2562218535197913,
+    "l2_1s": 0.2879857205494207,
+    "l2_1s_single": 0.391860175855059,
+    "l2_2s": 0.5656692134660125,
+    "l2_2s_single": 1.0224332498260347,
+    "l2_3s": 0.9477069647760868,
+    "l2_3s_single": 1.9671942150111779,
+    "l2_avg": 0.60045396626384,
+    "l2_avg_single": 1.1271625468974238,
+    "samples": 4219
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "checkpoint": "checkpoints/wpt_reward/last.pt",
+  "checkpoint_sha256": "fdb1574353303bfa1c5e0e4d0370eea43ad833f7fa262f88eb2568dfa5a9c646",
+  "config": {
+    "experiment": "wpt_reward",
+    "loss": {
+      "plan": 1.0,
+      "policy": 0,
+      "reward": 0.5
+    },
+    "optim": {
+      "batch_size": 64,
+      "epochs": 12,
+      "lr": 0.0002
+    },
+    "paths": {
+      "cache": "cache",
+      "checkpoints": "checkpoints",
+      "data_root": "data/nuscenes",
+      "infos_train": "data/nuscenes_infos_train_temporal_v3_scene.pkl",
+      "infos_val": "data/nuscenes_infos_val_temporal_v3_scene.pkl",
+      "occworld_root": "OccWorld",
+      "teacher_checkpoint": "checkpoints/teacher/best.pt"
+    },
+    "reward": {
+      "alpha": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "dim": 256,
+      "heads": 8,
+      "layers": 2
+    },
+    "seed": 0,
+    "stage": "wpt",
+    "student": {
+      "dim": 128,
+      "heads": 4,
+      "layers": 2,
+      "widths": [
+        32,
+        64,
+        128
+      ]
+    },
+    "teacher": {
+      "dim": 256,
+      "heads": 8,
+      "layers": 3,
+      "modes": 6
+    }
+  },
+  "deployed": [
+    "student"
+  ],
+  "environment": {
+    "cuda": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "hostname": "588ffea9d5dd",
+    "pid": 745288,
+    "python": "3.12.3",
+    "torch": "2.11.0+cu128"
+  },
+  "epoch": 12,
+  "experiment": "wpt_reward",
+  "git": {
+    "commit": "54b0648943af41ca41371f607260aa3b4de1bc72",
+    "dirty": true
+  },
+  "metrics": {
+    "box_col_1s": 0.5095994311448211,
+    "box_col_1s_single": 0.5451528798293435,
+    "box_col_2s": 0.5807063285138658,
+    "box_col_2s_single": 0.5214505807063285,
+    "box_col_3s": 0.8216797200021203,
+    "box_col_3s_single": 1.6354586394880304,
+    "box_col_avg": 0.6373284932202691,
+    "box_col_avg_jitter_mean": 0.7458981928586527,
+    "box_col_avg_jitter_std": 0.1876990895800406,
+    "box_col_avg_single": 0.9006873666745675,
+    "box_col_avg_single_jitter_mean": 1.2657027731689974,
+    "box_col_avg_single_jitter_std": 0.3104166768151033,
+    "col_1s": 1.4576913960654183,
+    "col_1s_single": 1.4458402465039109,
+    "col_2s": 1.3628821995733587,
+    "col_2s_single": 1.2325195543967764,
+    "col_3s": 1.279924175600272,
+    "col_3s_single": 1.042901161412657,
+    "col_avg": 1.366832590413016,
+    "col_avg_single": 1.2404203207711149,
+    "l2_1s": 0.3037511029554694,
+    "l2_1s_single": 0.40962458461278084,
+    "l2_2s": 0.5823247989618503,
+    "l2_2s_single": 1.03855326893866,
+    "l2_3s": 0.9658532535259835,
+    "l2_3s_single": 1.9905135452037346,
+    "l2_avg": 0.617309718481101,
+    "l2_avg_single": 1.146230466251725,
+    "samples": 4219
+  }
+}

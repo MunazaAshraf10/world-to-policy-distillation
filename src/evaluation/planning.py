@@ -84,3 +84,31 @@ def evaluate_trajectories(
             continue
         evaluator.add(trajs[i], targets[i], *dataset.annotations(i))
     return evaluator.summary()
+
+
+def jittered_collisions(
+    dataset: PlanningCache,
+    trajs: np.ndarray,
+    occworld_root: Path,
+    sigma: float = 0.01,
+    draws: int = 20,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Collision rates averaged over Gaussian position jitter of sigma meters.
+
+    A few windows sit on the collision boundary, so centimeter changes flip the exact rate by
+    about half a point; the jittered mean and its spread make runs comparable.
+    """
+    rng = np.random.default_rng(seed)
+    runs = [
+        evaluate_trajectories(
+            dataset, trajs + rng.normal(0.0, sigma, trajs.shape).astype(trajs.dtype), occworld_root
+        )
+        for _ in range(draws)
+    ]
+    out = {}
+    for key in ("box_col_avg_single", "box_col_avg"):
+        values = np.array([run[key] for run in runs])
+        out[f"{key}_jitter_mean"] = float(values.mean())
+        out[f"{key}_jitter_std"] = float(values.std())
+    return out

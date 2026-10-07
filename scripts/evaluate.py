@@ -7,7 +7,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from src.data.cache import PlanningCache
-from src.evaluation.planning import evaluate_trajectories
+from src.evaluation.planning import evaluate_trajectories, jittered_collisions
 from src.training.trainer import build_models, collect_predictions, load_codebook
 from src.utils.repro import environment, git_revision, sha256, write_json
 
@@ -19,6 +19,8 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--jitter", type=float, default=0.01, help="position noise in meters")
+    parser.add_argument("--draws", type=int, default=20)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -37,7 +39,13 @@ def main() -> None:
     data = PlanningCache(cache, "val", world=world)
     loader = DataLoader(data, batch_size=args.batch_size, num_workers=8, pin_memory=True)
     trajs = collect_predictions(models, loader, torch.device("cuda"), bf16=True)
-    metrics = evaluate_trajectories(data, trajs, Path(cfg["paths"]["occworld_root"]))
+    # The planning metric runs on the CPU, so release the GPU for concurrent evaluations.
+    for model in models.values():
+        model.cpu()
+    torch.cuda.empty_cache()
+    root = Path(cfg["paths"]["occworld_root"])
+    metrics = evaluate_trajectories(data, trajs, root)
+    metrics |= jittered_collisions(data, trajs, root, args.jitter, args.draws)
     report = {
         "experiment": cfg["experiment"],
         "checkpoint": str(args.checkpoint),
@@ -52,12 +60,15 @@ def main() -> None:
     output = args.output or Path("results") / f"{cfg['experiment']}.json"
     write_json(output, report)
     logger.info(
-        "%s: L2 %.3f / col %.3f (per-time) | L2 %.3f / col %.3f (cumulative) -> %s",
+        "%s: L2 %.3f / col %.3f (per-time) | L2 %.3f / col %.3f (cumulative) | "
+        "jittered col %.3f +- %.3f (per-time) -> %s",
         cfg["experiment"],
         metrics["l2_avg_single"],
         metrics["box_col_avg_single"],
         metrics["l2_avg"],
         metrics["box_col_avg"],
+        metrics["box_col_avg_single_jitter_mean"],
+        metrics["box_col_avg_single_jitter_std"],
         output,
     )
 

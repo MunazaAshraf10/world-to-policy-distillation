@@ -53,7 +53,9 @@ def main() -> None:
     def teacher_plan() -> torch.Tensor:
         pred = world.predict(occ, batch["rel_poses"], batch["modes"])
         plan, best = select_best(
-            teacher["teacher"], teacher["reward"], batch | {"codes": pred.codes}
+            teacher["teacher"],
+            teacher["reward"],
+            batch | {"codes": pred.codes, "ego_disp": pred.ego_disp},
         )
         return plan.traj_set[0, best[0]]
 
