@@ -9,7 +9,7 @@ Source: the local WPT.pdf, arXiv:2511.20095v2. This project adapts WPT to OccWor
 | Planning decoder P_D and head P_h | Sec. 3.1, Eqs. 1 and 2 | src/policy/decoder.py: PlanDecoder, PlanHead | Cross-attention refinement of plan queries; MLP to six per-step displacements, accumulated to positions [...,6,2] in the origin LiDAR frame. |
 | Student | Eq. 3 | src/policy/student.py: Student | Occupancy encoder over five observed frames (src/policy/encoder.py), one plan query Q^S [B,D]. Imports nothing from src/world or src/reward. |
 | Teacher | Eq. 8 | src/policy/teacher.py: Teacher | Decoder memory is F^w_{t+1}, not current features. K mode queries Q^T [B,K,D], each tied to a k-means trajectory anchor as in UniAD [20], give candidates [B,K,6,2] as anchor plus residual. |
-| Reward model | Eq. 9, Fig. 3 | src/reward/model.py: RewardModel | Trajectory embedding cross-attends to world tokens; imitation logits [B,N] and simulation logits [B,N,5]. |
+| Reward model | Eq. 9, Fig. 3 | src/reward/model.py: RewardModel | Embedding of each trajectory and its offset from OccWorld's predicted ego path cross-attends to world tokens; imitation logits [B,N] and simulation logits [B,N,5]. |
 | Selection and final reward | Eqs. 10 and 14 | src/reward/model.py: final_reward; src/training/steps.py: select_best | tau*_T = argmax of Eq. 14 over the candidate set. |
 | Imitation target | Eq. 11 | src/reward/targets.py: imitation_target | Sign corrected softmax(-d_i / tau); literal form available. |
 | Imitation and simulation losses | Eqs. 12 and 13 | src/losses/reward.py | Soft cross entropy over candidates; BCE on [B,N,5]. |

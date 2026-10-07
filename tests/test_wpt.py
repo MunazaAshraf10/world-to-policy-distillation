@@ -52,7 +52,7 @@ def test_output_shapes(models: dict[str, nn.Module], batch: dict[str, torch.Tens
     assert student.query.shape == (B, 32) and student.traj.shape == (B, T, 2)
     teacher = models["teacher"](batch["codes"], batch["command"], batch["ego_hist"])
     assert teacher.query.shape == (B, K, 32) and teacher.traj_set.shape == (B, K, T, 2)
-    scores = models["reward"](batch["codes"], teacher.traj_set)
+    scores = models["reward"](batch["codes"], batch["ego_disp"], teacher.traj_set)
     assert scores.im_logit.shape == (B, K) and scores.sim_logit.shape == (B, K, 5)
     assert torch.isfinite(final_reward(scores, (1.0, 1.0, 1.0, 1.0), 1e-6)).all()
 
@@ -74,6 +74,17 @@ def test_teacher_candidates_stay_distinct(batch: dict[str, torch.Tensor]) -> Non
     traj_set = teacher(batch["codes"], batch["command"], batch["ego_hist"]).traj_set
     spread = (traj_set[:, :, None] - traj_set[:, None]).norm(dim=-1).mean(-1)
     assert spread[:, ~torch.eye(K, dtype=torch.bool)].min() > 1.0
+
+
+def test_reward_reads_predicted_ego_path(
+    models: dict[str, nn.Module], batch: dict[str, torch.Tensor]
+) -> None:
+    traj_set = batch["target"].cumsum(1)[:, None].expand(B, K, T, 2)
+    reward = models["reward"].eval()
+    with torch.no_grad():
+        near = reward(batch["codes"], batch["ego_disp"], traj_set).im_logit
+        far = reward(batch["codes"], batch["ego_disp"] + 3.0, traj_set).im_logit
+    assert not torch.allclose(near, far)
 
 
 def test_policy_loss_vanishes_for_identical_queries() -> None:

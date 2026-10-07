@@ -47,8 +47,9 @@ class CrossBlock(nn.Module):
 class RewardModel(nn.Module):
     """Trajectory-world interaction F^{w,i} = RewardModel(F^w_{t+1}, tau_i) (Eq. 9).
 
-    An imitation head scores each candidate against the set and a simulation head predicts
-    the five rule based terms of App. 6.3.
+    F^w_{t+1} comprises OccWorld's predicted latents and its predicted ego path; each candidate
+    is encoded together with its offset from that path. An imitation head scores each candidate
+    against the set and a simulation head predicts the five rule based terms of App. 6.3.
     """
 
     def __init__(self, cfg: RewardConfig, codebook: torch.Tensor) -> None:
@@ -56,17 +57,23 @@ class RewardModel(nn.Module):
         self.cfg = cfg
         self.world = WorldEncoder(cfg.dim, codebook)
         self.traj_encoder = nn.Sequential(
-            nn.Linear(cfg.horizon * 2, cfg.dim), nn.SiLU(), nn.Linear(cfg.dim, cfg.dim)
+            nn.Linear(cfg.horizon * 4, cfg.dim), nn.SiLU(), nn.Linear(cfg.dim, cfg.dim)
         )
         self.blocks = nn.ModuleList(CrossBlock(cfg.dim, cfg.heads) for _ in range(cfg.layers))
         self.norm = nn.LayerNorm(cfg.dim)
         self.im_head = nn.Linear(cfg.dim, 1)
         self.sim_head = nn.Linear(cfg.dim, len(SIM_TERMS))
 
-    def forward(self, codes: torch.Tensor, traj_set: torch.Tensor) -> RewardOutput:
-        """codes [B, F, 50, 50], traj_set [B, N, T, 2] to logits [B, N] and [B, N, 5]."""
+    def forward(
+        self, codes: torch.Tensor, ego_disp: torch.Tensor, traj_set: torch.Tensor
+    ) -> RewardOutput:
+        """codes [B, F, 50, 50], ego_disp [B, T, 2] predicted per-step ego displacement, and
+        traj_set [B, N, T, 2] to logits [B, N] and [B, N, 5]."""
         world = self.world(codes)
-        feat = self.traj_encoder(traj_set.flatten(2) / self.cfg.position_scale)
+        offset = traj_set - ego_disp.cumsum(dim=1)[:, None]
+        feat = self.traj_encoder(
+            torch.cat([traj_set, offset], dim=-1).flatten(2) / self.cfg.position_scale
+        )
         for block in self.blocks:
             feat = block(feat, world)
         feat = self.norm(feat)

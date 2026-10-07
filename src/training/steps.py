@@ -50,7 +50,7 @@ def teacher_step(
             batch["lidar2ego"],
             sim,
         )
-    scores = reward(batch["codes"], traj_set)
+    scores = reward(batch["codes"], batch["ego_disp"], traj_set)
     return {
         "wta": wta_loss(out.traj_set, target, batch["target_mask"]),
         "im": imitation_loss(scores.im_logit, im_target),
@@ -63,7 +63,9 @@ def select_best(
 ) -> tuple[TeacherOutput, torch.Tensor]:
     """Teacher outputs with the reward selected mode tau*_T = argmax r_final (Eq. 14)."""
     out = teacher(batch["codes"], batch["command"], batch["ego_hist"])
-    score = final_reward(reward(batch["codes"], out.traj_set), reward.cfg.alpha, reward.cfg.eps)
+    score = final_reward(
+        reward(batch["codes"], batch["ego_disp"], out.traj_set), reward.cfg.alpha, reward.cfg.eps
+    )
     return out, score.argmax(dim=-1)
 
 
@@ -85,7 +87,9 @@ def wpt_step(
     rows = torch.arange(best.shape[0], device=best.device)
     out = student(batch["occ"], batch["command"], batch["ego_hist"])
     candidates = torch.cat([plan.traj_set, out.traj[:, None]], dim=1)
-    score = final_reward(reward(batch["codes"], candidates), reward.cfg.alpha, reward.cfg.eps)
+    score = final_reward(
+        reward(batch["codes"], batch["ego_disp"], candidates), reward.cfg.alpha, reward.cfg.eps
+    )
     return {
         "plan": plan_loss(out.traj, expert_positions(batch), batch["target_mask"]),
         "policy": policy_loss(projector(out.query), plan.query[rows, best]),
