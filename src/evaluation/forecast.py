@@ -1,5 +1,8 @@
 import torch
+from torch.utils.data import DataLoader
 
+from src.data.cache import PlanningCache
+from src.world.occworld import OccWorldAdapter
 from src.world.types import FREE, Rollout
 
 
@@ -41,3 +44,23 @@ class ForecastMeter:
         out["miou_mean"] = miou.mean().item()
         out["iou_mean"] = occ_iou.mean().item()
         return out
+
+
+@torch.no_grad()
+def evaluate_rollouts(
+    adapter: OccWorldAdapter, data: PlanningCache, batch_size: int = 4
+) -> dict[str, float]:
+    """Forecast mIoU and IoU of history-only rollouts against the Occ3D future frames."""
+    r = adapter.rollout
+    device = next(adapter.model.parameters()).device
+    meter = ForecastMeter(r)
+    for batch in DataLoader(data, batch_size=batch_size, num_workers=4):
+        rows = data.windows["frames"][batch["index"].numpy()]
+        future = torch.from_numpy(data.occ[rows[:, r.history : r.history + r.future]])
+        pred = adapter.predict(
+            batch["occ"].to(device).long(),
+            batch["rel_poses"].to(device),
+            batch["modes"].to(device),
+        ).occupancy
+        meter.update(pred.cpu(), future.long())
+    return meter.summary()

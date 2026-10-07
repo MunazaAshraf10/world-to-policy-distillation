@@ -79,7 +79,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Verify the frozen OccWorld integration")
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
-    parser.add_argument("--windows", type=int, default=4)
+    # Rollouts match the cache only under its batch composition; build_cache batches 16.
+    parser.add_argument("--windows", type=int, default=16)
     parser.add_argument("--output", type=Path, default=Path("results/occworld_verify.json"))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

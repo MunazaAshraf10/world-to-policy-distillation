@@ -44,6 +44,7 @@ cp checkpoints/occworld/last.pt checkpoints/occworld/world.pt
 # 2. Verify the frozen integration and cache its rollouts.
 uv run python -m scripts.build_cache world --checkpoint checkpoints/occworld/world.pt
 uv run python -m scripts.verify_occworld --checkpoint checkpoints/occworld/world.pt
+uv run python -m scripts.evaluate_world --checkpoint checkpoints/occworld/world.pt
 
 # 3. Policies.
 uv run python -m scripts.train --config configs/student.yaml

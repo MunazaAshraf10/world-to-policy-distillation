@@ -13,7 +13,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from src.data.cache import PlanningCache
-from src.evaluation.forecast import ForecastMeter
+from src.evaluation.forecast import ForecastMeter, evaluate_rollouts
 from src.training.trainer import cosine_schedule
 from src.utils.repro import environment, git_revision, seed_everything, write_json
 from src.world.occworld import (
@@ -160,32 +160,30 @@ class WorldTrainer:
         self.model.eval()
         for p in self.params:
             p.grad = None
-        meter = ForecastMeter()
         val = PlanningCache(self.cache, "val", limit=self.train_cfg.eval_windows)
-        loader = DataLoader(val, batch_size=4, num_workers=4)
-        rollout = Rollout()
-        adapter = OccWorldAdapter(self.model) if self.train_cfg.stage != "vqvae" else None
-        for batch in loader:
-            rows = val.windows["frames"][batch["index"].numpy()]
-            future = torch.from_numpy(
-                val.occ[rows[:, rollout.history : rollout.history + rollout.future]]
-            )
-            if adapter is None:
-                occ = future.to(self.device).long()
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.train_cfg.bf16):
-                    pred = self.model(occ)["logits"].argmax(-1)
-            else:
-                pred = adapter.predict(
-                    batch["occ"].to(self.device).long(),
-                    batch["rel_poses"].to(self.device),
-                    batch["modes"].to(self.device),
-                ).occupancy
-            meter.update(pred.cpu(), future.long())
-        if adapter is not None:
+        if self.train_cfg.stage == "vqvae":
+            metrics = self.reconstruction(val)
+        else:
+            metrics = evaluate_rollouts(OccWorldAdapter(self.model), val)
             self.model.requires_grad_(False)
             for p in self.params:
                 p.requires_grad_(True)
         self.model.train()
+        return metrics
+
+    def reconstruction(self, val: PlanningCache) -> dict[str, float]:
+        """VQVAE reconstruction mIoU/IoU on the future frames of each validation window."""
+        meter = ForecastMeter()
+        rollout = Rollout()
+        for batch in DataLoader(val, batch_size=4, num_workers=4):
+            rows = val.windows["frames"][batch["index"].numpy()]
+            future = torch.from_numpy(
+                val.occ[rows[:, rollout.history : rollout.history + rollout.future]]
+            )
+            occ = future.to(self.device).long()
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.train_cfg.bf16):
+                pred = self.model(occ)["logits"].argmax(-1)
+            meter.update(pred.cpu(), future.long())
         return meter.summary()
 
     def run(self) -> dict[str, Any]:
